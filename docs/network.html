@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Tableau de bord réseau — Stratégie</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="js/france-map-background.js"></script>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+  nav a { margin-right: 1rem; }
+  .kpis { display: flex; gap: 1rem; flex-wrap: wrap; margin: 1rem 0; }
+  .kpi { flex: 1; min-width: 160px; padding: 0.8rem 1rem; border: 1px solid #ccc; border-radius: 8px; }
+  .kpi .value { font-size: 1.5rem; font-weight: bold; color: #8b2ea0; }
+  .kpi .label { font-size: 0.8rem; color: #666; }
+  #caveat { padding: 0.8rem 1rem; border: 2px solid #c46e0a; border-radius: 8px; background: #faf3e8; margin: 1rem 0; }
+  .maps { display: flex; gap: 1rem; flex-wrap: wrap; }
+  .maps > div { flex: 1; min-width: 320px; }
+  canvas { margin-top: 1.5rem; }
+</style>
+</head>
+<body>
+  <nav><a href="index.html">Accueil</a> | <a href="co2.html">CO2 (développement durable)</a> | <a href="cost.html">Coûts (opérations)</a> | <strong>Réseau (stratégie)</strong></nav>
+  <h1>Faut-il ouvrir un entrepôt à Bordeaux ou à Marseille, ou fermer Lille ?</h1>
+  <p>Pour : le responsable stratégie / planification du réseau.</p>
+  <div class="kpis" id="kpis">Chargement...</div>
+  <div id="caveat"></div>
+
+  <h2>Comparaison des scénarios</h2>
+  <canvas id="scenarioChart" height="260"></canvas>
+
+  <h2>Situation actuelle et meilleure alternative</h2>
+  <p>Couleur = entrepôt qui dessert la ville ; triangle = l'entrepôt lui-même.</p>
+  <div class="maps">
+    <div><h3 id="baselineTitle">Situation actuelle</h3><canvas id="baselineMap" height="300"></canvas></div>
+    <div><h3 id="altTitle">Meilleure alternative</h3><canvas id="altMap" height="300"></canvas></div>
+  </div>
+
+<script>
+const WAREHOUSE_COLORS = { 'Paris': '#0d7c9e', 'Lyon': '#2e8b46', 'Lille': '#c46e0a', 'Bordeaux': '#8b2ea0', 'Marseille': '#d1345b' };
+
+function drawMap(canvasId, cities, title) {
+  const groups = {};
+  cities.forEach(c => { (groups[c.warehouse] = groups[c.warehouse] || []).push(c); });
+  // Styles par point (et non par jeu de données) : le hub de l'entrepôt a un
+  // plus gros triangle cerclé de noir, chaque ville qu'il dessert reste un
+  // simple cercle, le tout sous UNE seule entrée de légende par entrepôt.
+  const datasets = Object.entries(groups).map(([wh, pts]) => ({
+    label: wh,
+    data: pts.map(p => ({ x: p.lon, y: p.lat, city: p.city })),
+    backgroundColor: WAREHOUSE_COLORS[wh] || '#888',
+    pointStyle: pts.map(p => (p.city === wh ? 'triangle' : 'circle')),
+    pointRadius: pts.map(p => (p.city === wh ? 11 : 6)),
+    pointBorderColor: pts.map(p => (p.city === wh ? '#000' : 'transparent')),
+    pointBorderWidth: pts.map(p => (p.city === wh ? 2 : 0)),
+  }));
+  new Chart(document.getElementById(canvasId), {
+    type: 'scatter',
+    data: { datasets },
+    // Même franceBackgroundPlugin que le tableau de bord CO2 : ici il compte
+    // encore plus, car la décision EST géographique.
+    plugins: [franceBackgroundPlugin],
+    options: {
+      plugins: {
+        title: { display: true, text: title },
+        legend: { position: 'bottom' },
+        tooltip: { callbacks: { label: (item) => {
+          const p = item.raw;
+          return p.city === item.dataset.label ? `${p.city} (entrepôt)` : `${p.city} -> ${item.dataset.label}`;
+        } } },
+      },
+      scales: {
+        x: { title: { display: true, text: 'Longitude' }, min: FRANCE_BBOX.minLon, max: FRANCE_BBOX.maxLon },
+        y: { title: { display: true, text: 'Latitude' }, min: FRANCE_BBOX.minLat, max: FRANCE_BBOX.maxLat },
+      },
+    },
+  });
+}
+
+fetch('data/network.json')
+  .then(r => r.json())
+  .then(data => {
+    const scenarios = data.scenarios || [];
+    const baseline = scenarios.find(s => s.scenario.startsWith('situation actuelle'));
+    const best = scenarios[0];
+
+    document.getElementById('kpis').innerHTML = `
+      <div class="kpi"><div class="value">${baseline.avg_distance_km_population_weighted} km</div><div class="label">Distance moyenne actuelle (pondérée par la population)</div></div>
+      <div class="kpi"><div class="value">${best.avg_distance_km_population_weighted} km</div><div class="label">Meilleure alternative : ${best.scenario}</div></div>
+    `;
+    document.getElementById('caveat').innerHTML =
+      '<strong>Limite :</strong> analyse basée sur la distance uniquement, sans le coût d\'investissement, le coût de sortie de bail, ni l\'intérêt stratégique de Lille (Belgique/Royaume-Uni).';
+
+    new Chart(document.getElementById('scenarioChart'), {
+      type: 'bar',
+      data: {
+        labels: scenarios.map(s => s.scenario),
+        datasets: [{ label: 'Distance moyenne, pondérée par la population (km)', data: scenarios.map(s => s.avg_distance_km_population_weighted),
+          backgroundColor: scenarios.map(s => s.scenario === best.scenario ? '#2e8b46' : '#0d7c9e') }],
+      },
+      options: { plugins: { legend: { display: false }, title: { display: true, text: 'Plus c\'est bas, mieux c\'est — vert = meilleure option trouvée' } } },
+    });
+
+    document.getElementById('baselineTitle').textContent = `Situation actuelle : ${baseline.warehouses.join(', ')}`;
+    document.getElementById('altTitle').textContent = `${data.best_alternative_name} : ${best.warehouses.join(', ')}`;
+    drawMap('baselineMap', data.baseline_map, 'Affectation actuelle');
+    drawMap('altMap', data.best_alternative_map, 'Affectation de la meilleure alternative');
+  })
+  .catch(err => { document.getElementById('kpis').innerHTML = '<p>Impossible de charger les données (' + err + ').</p>'; });
+</script>
+</body>
+</html>
